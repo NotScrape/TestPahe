@@ -10,10 +10,10 @@ android {
 
     defaultConfig {
         applicationId = "eu.kanade.tachiyomi.animeextension.en.animepahe"
-        minSdk = 21
+        minSdk = 26
         targetSdk = 34
         versionCode = 39
-        versionName = "14.39"
+        versionName = "16.39"
     }
 
     buildTypes {
@@ -23,6 +23,7 @@ android {
         }
         release {
             isMinifyEnabled = false
+            vcsInfo.include = false
             proguardFiles(
                 getDefaultProguardFile("proguard-android-optimize.txt"),
                 "proguard-rules.pro",
@@ -35,9 +36,28 @@ android {
         targetCompatibility = JavaVersion.VERSION_17
     }
 
-    kotlinOptions {
-        jvmTarget = "17"
-        freeCompilerArgs += listOf(
+    buildFeatures {
+        buildConfig = true
+        aidl = false
+        renderScript = false
+        resValues = false
+        shaders = false
+    }
+
+    dependenciesInfo {
+        includeInApk = false
+    }
+
+    packaging {
+        resources.excludes.add("kotlin-tooling-metadata.json")
+    }
+}
+
+kotlin {
+    jvmToolchain(17)
+
+    compilerOptions {
+        freeCompilerArgs.addAll(
             "-opt-in=kotlinx.serialization.ExperimentalSerializationApi",
         )
     }
@@ -50,13 +70,4 @@ dependencies {
         exclude(group = "org.jetbrains.kotlin")
     }
     implementation(libs.nanohttpd)
-}
-
-configurations.all {
-    resolutionStrategy.eachDependency {
-        if (requested.group == "org.jetbrains.kotlin" && requested.name == "kotlin-stdlib-jdk8" && requested.version == "1.7.0") {
-            useVersion(libs.versions.kotlin.version.get())
-            because("Fix problems with dev.datlag JsUnpacker")
-        }
-    }
 }
