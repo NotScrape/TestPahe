@@ -14,6 +14,8 @@ import eu.kanade.tachiyomi.animesource.model.Video
 import eu.kanade.tachiyomi.network.GET
 import eu.kanade.tachiyomi.util.asJsoup
 import eu.kanade.tachiyomi.util.parseAs
+import kotlinx.coroutines.Dispatchers
+import kotlinx.coroutines.withContext
 import okhttp3.OkHttpClient
 import okhttp3.Response
 import org.jsoup.nodes.Element
@@ -69,7 +71,9 @@ class AnimePaheRepositoryImpl(
             database.getSession(animeId)?.let { return it }
         }
 
-        val encodedTitle = URLEncoder.encode(title, "UTF-8")
+        val encodedTitle = withContext(Dispatchers.IO) {
+            URLEncoder.encode(title, "UTF-8")
+        }
         val request = GET("${baseUrlProvider()}/api?m=search&l=8&q=$encodedTitle")
         return client.newCall(request).execute().use { response ->
             val searchData = response.parseAs<ResponseDto<SearchResultDto>>()

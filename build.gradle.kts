@@ -16,6 +16,10 @@ android {
         versionName = "16.39"
     }
 
+    base {
+        archivesName.set("aniyomi-en.animepahe-v${defaultConfig.versionName}")
+    }
+
     buildTypes {
         debug {
             isDebuggable = true

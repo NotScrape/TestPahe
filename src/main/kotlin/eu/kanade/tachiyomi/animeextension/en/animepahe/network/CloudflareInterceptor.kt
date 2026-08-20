@@ -31,7 +31,6 @@ import java.util.concurrent.CountDownLatch
 import java.util.concurrent.TimeUnit
 
 class CloudflareInterceptor(
-    private val client: OkHttpClient,
     private val useDefaultUserAgent: () -> Boolean
 ) : Interceptor {
     private val context: Application by injectLazy()

@@ -78,10 +78,6 @@ class AnimePaheDatabase(context: Context) : SQLiteOpenHelper(context, DB_NAME, n
         return writableDatabase.delete(TABLE_SESSIONS, null, null)
     }
 
-    fun pruneOldSessions(maxAgeDays: Int = DEFAULT_MAX_AGE_DAYS): Int {
-        return pruneOldSessions(writableDatabase, maxAgeDays)
-    }
-
     private fun pruneOldSessions(db: SQLiteDatabase, maxAgeDays: Int = DEFAULT_MAX_AGE_DAYS): Int {
         val threshold = System.currentTimeMillis() - (maxAgeDays * 24L * 60 * 60 * 1000)
         return db.delete(TABLE_SESSIONS, "$COL_UPDATED_AT < ?", arrayOf(threshold.toString()))

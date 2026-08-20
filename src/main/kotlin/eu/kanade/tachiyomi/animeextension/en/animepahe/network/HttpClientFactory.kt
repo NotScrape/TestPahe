@@ -12,7 +12,6 @@ class HttpClientFactory(
 
         if (!preferences.useOfflineMode) {
             val cloudflareInterceptor = CloudflareInterceptor(
-                baseClient,
                 useDefaultUserAgent = { preferences.useDefaultUserAgent },
             )
             builder.addInterceptor(cloudflareInterceptor)
