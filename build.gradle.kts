@@ -38,10 +38,6 @@ android {
 
     buildFeatures {
         buildConfig = true
-        aidl = false
-        renderScript = false
-        resValues = false
-        shaders = false
     }
 
     dependenciesInfo {
