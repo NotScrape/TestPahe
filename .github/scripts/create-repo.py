@@ -1,23 +1,27 @@
 #!/usr/bin/env python3
 """
-Builds the `repo` branch contents from a folder of assembled APKs:
-  - copies/renames APKs into apk/
-  - extracts each extension's icon into icon/<pkg>.png
-  - writes index.json and index.min.json describing every extension
+Builds the `repo` branch contents from a folder of assembled APKs.
 
-This mirrors the metadata format Mihon/Aniyomi-based apps expect from a
-third-party extension repo (the same shape Keiyoushi's `extensions` repo
-and Secozzi's `aniyomi-extensions` repo branch publish).
+Output:
+  repo/
+    apk/
+      *.apk
+    icon/
+      <package>.png
+    index.json
+    index.min.json
 
 Usage:
     python create-repo.py <apk_input_dir> <repo_output_dir>
 
-Requires: androguard (pip install androguard --break-system-packages)
+Requires:
+    pip install androguard
 """
+
+import hashlib
 import json
 import shutil
 import sys
-import zipfile
 from pathlib import Path
 
 try:
@@ -27,71 +31,194 @@ except ImportError:
         "androguard is required: pip install androguard --break-system-packages"
     )
 
+
+# Aniyomi extension metadata
 NSFW_META = "tachiyomi.animeextension.nsfw"
-CLASS_META = "tachiyomi.animeextension.class"
-# Swap the two constants above for the manga equivalents if this repo also
-# ships Tachiyomi/manga sources instead of (or alongside) anime sources:
-#   tachiyomi.extension.nsfw / tachiyomi.extension.class
+VERSION_ID_META = "tachiyomi.animeextension.versionId"
+NAMES_META = "tachiyomi.animeextension.names"
 
 
-def extract_icon(apk: APK, out_path: Path) -> None:
-    # Extensions ship a single mipmap icon named ic_launcher.png (all densities
-    # point at the same drawable in these build systems); grab the highest-res one.
-    candidates = sorted(
-        (f for f in apk.get_files() if f.endswith("ic_launcher.png")),
-        key=lambda f: ("xxxhdpi" not in f, "xxhdpi" not in f, "xhdpi" not in f, f),
-    )
+def get_id(name: str, version_id: int) -> str:
+    """
+    Generates the source ID used by Aniyomi/Mihon-style extension repos.
+    """
+    key = f"{name.lower()}/all/{version_id}"
+    md5_hash = hashlib.md5(key.encode()).digest()
+
+    result = 0
+    for i in range(8):
+        result |= (md5_hash[i] & 0xFF) << (8 * (7 - i))
+
+    return str(result & 0x7FFFFFFFFFFFFFFF)
+
+
+def get_metadata(apk: APK) -> dict[str, str]:
+    """
+    Extract application meta-data from AndroidManifest.xml.
+    """
+    metadata = {}
+
+    manifest = apk.get_android_manifest_xml()
+
+    for tag in manifest.getElementsByTagName("meta-data"):
+        name = tag.getAttribute("android:name")
+        value = tag.getAttribute("android:value")
+
+        if name:
+            metadata[name] = value
+
+    return metadata
+
+
+def extract_icon(apk: APK, output_path: Path) -> None:
+    """
+    Extract the highest-resolution ic_launcher.png available.
+    """
+    candidates = [
+        file
+        for file in apk.get_files()
+        if file.endswith("ic_launcher.png")
+    ]
+
     if not candidates:
+        print(f"[create-repo] warning: no ic_launcher.png found")
         return
-    data = apk.get_file(candidates[0])
-    out_path.write_bytes(data)
+
+    # Prefer higher-density icons.
+    priority = {
+        "xxxhdpi": 0,
+        "xxhdpi": 1,
+        "xhdpi": 2,
+        "hdpi": 3,
+        "mdpi": 4,
+    }
+
+    candidates.sort(
+        key=lambda file: (
+            min(
+                (
+                    priority[density]
+                    for density in priority
+                    if density in file
+                ),
+                default=99,
+            ),
+            file,
+        )
+    )
+
+    output_path.parent.mkdir(parents=True, exist_ok=True)
+    output_path.write_bytes(apk.get_file(candidates[0]))
+
+
+def get_language(apk_path: Path) -> str:
+    """
+    Gets the extension language from the APK filename.
+
+    Expected examples:
+        aniyomi-en.extension.apk
+        aniyomi-all.extension.apk
+    """
+    parts = apk_path.name.split("-")
+
+    if len(parts) >= 2 and parts[0].lower() == "aniyomi":
+        return parts[1].split(".")[0]
+
+    return "all"
 
 
 def build_entry(apk_path: Path, icon_dir: Path) -> dict | None:
+    """
+    Parse one APK and create its repository entry.
+    """
     apk = APK(str(apk_path))
-    pkg = apk.get_package()
-    meta = apk.get_all_attribute_value(
-        "application", "value", namespace=None
-    )  # not used directly; kept for readability
 
-    app_meta = {}
-    for tag in apk.get_android_manifest_xml().getElementsByTagName("meta-data"):
-        name = tag.getAttribute("android:name")
-        value = tag.getAttribute("android:value")
-        app_meta[name] = value
+    package_name = apk.get_package()
 
-    class_name = app_meta.get(CLASS_META, "")
-    nsfw = 1 if app_meta.get(NSFW_META) == "true" else 0
+    metadata = get_metadata(apk)
+
+    # ---------------------------------------------------------
+    # Basic APK information
+    # ---------------------------------------------------------
 
     version_name = apk.get_androidversion_name()
     version_code = int(apk.get_androidversion_code())
-    label = apk.get_app_name() or pkg
+    application_label = apk.get_app_name() or package_name
+
+    # ---------------------------------------------------------
+    # Aniyomi metadata
+    # ---------------------------------------------------------
+
+    nsfw = 1 if metadata.get(NSFW_META) == "true" else 0
+
+    version_id_raw = metadata.get(VERSION_ID_META)
+
+    if version_id_raw:
+        version_id = int(version_id_raw)
+    else:
+        # Fallback in case the APK doesn't contain versionId.
+        version_id = version_code
+
+    names_raw = metadata.get(NAMES_META)
+
+    if names_raw:
+        names = [
+            name.strip()
+            for name in names_raw.split(";")
+            if name.strip()
+        ]
+    else:
+        # Fallback to application label.
+        names = [application_label]
+
+    # ---------------------------------------------------------
+    # Language
+    # ---------------------------------------------------------
+
+    language = get_language(apk_path)
+
+    # ---------------------------------------------------------
+    # Icon
+    # ---------------------------------------------------------
 
     icon_dir.mkdir(parents=True, exist_ok=True)
-    extract_icon(apk, icon_dir / f"{pkg}.png")
+    extract_icon(
+        apk,
+        icon_dir / f"{package_name}.png",
+    )
 
-    lang = pkg.split(".")[-2] if pkg.count(".") >= 2 else "all"
+    # ---------------------------------------------------------
+    # Sources
+    # ---------------------------------------------------------
+
+    sources = []
+
+    for name in names:
+        sources.append(
+            {
+                "name": name,
+                "lang": language,
+                "id": get_id(name, version_id),
+                "baseUrl": "",
+                "versionId": version_id,
+            }
+        )
+
+    # ---------------------------------------------------------
+    # Final repository entry
+    # ---------------------------------------------------------
 
     return {
-        "name": label,
-        "pkg": pkg,
+        "name": application_label,
+        "pkg": package_name,
         "apk": apk_path.name,
-        "lang": lang,
+        "lang": language,
         "code": version_code,
         "version": version_name,
         "nsfw": nsfw,
-        "hasReadme": False,
-        "hasChangelog": False,
-        "sources": [
-            {
-                "name": label,
-                "id": 0,
-                "baseUrl": "",
-                "lang": lang,
-                "versionId": version_code,
-            }
-        ],
-        "className": class_name,
+        "hasReadme": 0,
+        "hasChangelog": 0,
+        "sources": sources,
     }
 
 
@@ -99,29 +226,94 @@ def main() -> None:
     if len(sys.argv) != 3:
         sys.exit(__doc__)
 
-    apk_dir = Path(sys.argv[1])
+    apk_input_dir = Path(sys.argv[1])
     repo_dir = Path(sys.argv[2])
-    apk_out = repo_dir / "apk"
-    icon_out = repo_dir / "icon"
-    apk_out.mkdir(parents=True, exist_ok=True)
+
+    apk_output_dir = repo_dir / "apk"
+    icon_output_dir = repo_dir / "icon"
+
+    if not apk_input_dir.exists():
+        sys.exit(
+            f"[create-repo] APK input directory does not exist: "
+            f"{apk_input_dir}"
+        )
+
+    apk_output_dir.mkdir(parents=True, exist_ok=True)
+    icon_output_dir.mkdir(parents=True, exist_ok=True)
 
     entries = []
-    for apk_path in sorted(apk_dir.glob("*.apk")):
+
+    # ---------------------------------------------------------
+    # Process APKs
+    # ---------------------------------------------------------
+
+    for apk_path in sorted(apk_input_dir.glob("*.apk")):
         try:
-            entry = build_entry(apk_path, icon_out)
-        except Exception as exc:  # noqa: BLE001
-            print(f"[create-repo] skipping {apk_path.name}: {exc}", file=sys.stderr)
-            continue
-        if entry is None:
-            continue
-        shutil.copy2(apk_path, apk_out / apk_path.name)
-        entries.append(entry)
+            entry = build_entry(
+                apk_path,
+                icon_output_dir,
+            )
 
-    entries.sort(key=lambda e: (e["lang"], e["name"]))
+            if entry is None:
+                continue
 
-    (repo_dir / "index.json").write_text(json.dumps(entries, indent=2))
-    (repo_dir / "index.min.json").write_text(json.dumps(entries, separators=(",", ":")))
-    print(f"[create-repo] wrote {len(entries)} extension entries")
+            # Copy APK into repo/apk/
+            shutil.copy2(
+                apk_path,
+                apk_output_dir / apk_path.name,
+            )
+
+            entries.append(entry)
+
+            print(
+                f"[create-repo] processed {apk_path.name}"
+            )
+
+        except Exception as exc:
+            print(
+                f"[create-repo] skipping {apk_path.name}: {exc}",
+                file=sys.stderr,
+            )
+
+    # ---------------------------------------------------------
+    # Sort entries
+    # ---------------------------------------------------------
+
+    entries.sort(key=lambda entry: entry["pkg"])
+
+    # ---------------------------------------------------------
+    # index.json
+    # ---------------------------------------------------------
+
+    index_json = repo_dir / "index.json"
+
+    index_json.write_text(
+        json.dumps(
+            entries,
+            ensure_ascii=False,
+            indent=2,
+        ),
+        encoding="utf-8",
+    )
+
+    # ---------------------------------------------------------
+    # index.min.json
+    # ---------------------------------------------------------
+
+    index_min_json = repo_dir / "index.min.json"
+
+    index_min_json.write_text(
+        json.dumps(
+            entries,
+            ensure_ascii=False,
+            separators=(",", ":"),
+        ),
+        encoding="utf-8",
+    )
+
+    print(
+        f"[create-repo] wrote {len(entries)} extension entries"
+    )
 
 
 if __name__ == "__main__":
